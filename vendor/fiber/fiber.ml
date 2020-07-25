@@ -18,7 +18,7 @@ module Execution_context : sig
     val run_queue : 'a t Queue.t -> 'a -> unit
   end
 
-  (* Execute a function returning a fiber, passing any raised excetion to the
+  (* Execute a function returning a fiber, passing any raised exception to the
      current execution context. [apply] is guaranteed to not raise. *)
   val apply : ('a -> 'b t) -> 'a -> 'b t
 
@@ -69,15 +69,13 @@ end = struct
     let t = !current in
     t.fibers := !(t.fibers) + n
 
-  external sys_exit : int -> _ = "caml_sys_exit"
-
   let rec forward_error t exn =
     match t.on_error with
     | None ->
       (* We can't let the exception leak at this point, so we just dump the
          error on stderr and exit *)
       Format.eprintf "%a@.%!" Exn_with_backtrace.pp_uncaught exn;
-      sys_exit 42
+      exit 42
     | Some { ctx; run } -> (
       current := ctx;
       try run exn
@@ -158,7 +156,7 @@ end = struct
 
     let run_queue q x =
       let backup = !current in
-      Queue.iter (fun k -> run_k k x) q;
+      Queue.iter ~f:(fun k -> run_k k x) q;
       current := backup
   end
 
@@ -319,9 +317,9 @@ module Var = struct
 
   let get_exn var = Univ_map.find_exn (EC.vars ()) var
 
-  let set_sync var x f = EC.set_vars_sync (Univ_map.add (EC.vars ()) var x) f ()
+  let set_sync var x f = EC.set_vars_sync (Univ_map.set (EC.vars ()) var x) f ()
 
-  let set var x f k = EC.set_vars (Univ_map.add (EC.vars ()) var x) f () k
+  let set var x f k = EC.set_vars (Univ_map.set (EC.vars ()) var x) f () k
 
   let unset_sync var f =
     EC.set_vars_sync (Univ_map.remove (EC.vars ()) var) f ()
@@ -385,7 +383,7 @@ module Ivar = struct
   let read t k =
     match t.state with
     | Full x -> k x
-    | Empty q -> Queue.push (K.create k) q
+    | Empty q -> Queue.push q (K.create k)
 
   let peek t k =
     k
@@ -405,7 +403,9 @@ end
 let fork f k =
   let ivar = Ivar.create () in
   EC.add_refs 1;
-  EC.apply f () (fun x -> Ivar.fill ivar x ignore);
+  EC.apply f () (fun x ->
+      Ivar.fill ivar x ignore;
+      EC.deref ());
   k ivar
 
 let nfork_map l ~f k =
@@ -433,7 +433,7 @@ module Mutex = struct
 
   let lock t k =
     if t.locked then
-      Queue.push (K.create k) t.waiters
+      Queue.push t.waiters (K.create k)
     else (
       t.locked <- true;
       k ()
@@ -441,10 +441,9 @@ module Mutex = struct
 
   let unlock t k =
     assert t.locked;
-    if Queue.is_empty t.waiters then
-      t.locked <- false
-    else
-      K.run (Queue.pop t.waiters) ();
+    ( match Queue.pop t.waiters with
+    | None -> t.locked <- false
+    | Some next -> K.run next () );
     k ()
 
   let with_lock t f =
@@ -458,3 +457,69 @@ let run t =
   let result = ref None in
   EC.apply (fun () -> t) () (fun x -> result := Some x);
   !result
+
+let fork_and_race fa fb k =
+  let state = ref Nothing_yet in
+  EC.add_refs 1;
+  EC.apply fa () (fun a ->
+      match !state with
+      | Nothing_yet ->
+        EC.deref ();
+        state := Got_a ();
+        k (Left a)
+      | Got_a () -> assert false
+      | Got_b () -> ());
+  fb () (fun b ->
+      match !state with
+      | Nothing_yet ->
+        EC.deref ();
+        state := Got_b ();
+        k (Right b)
+      | Got_a () -> ()
+      | Got_b () -> assert false)
+
+module Mvar = struct
+  type 'a t =
+    { writers : ('a * unit K.t) Queue.t
+    ; readers : 'a K.t Queue.t
+    ; mutable value : 'a option
+    }
+
+  (* Invariant enforced on mvars. We don't actually call this function, but we
+     keep it here for documentation and to help understand the implementation: *)
+  let _invariant t =
+    match t.value with
+    | None -> Queue.is_empty t.writers
+    | Some _ -> Queue.is_empty t.readers
+
+  let create () =
+    { value = None; writers = Queue.create (); readers = Queue.create () }
+
+  let create_full x =
+    { value = Some x; writers = Queue.create (); readers = Queue.create () }
+
+  let read t k =
+    match t.value with
+    | None -> Queue.push t.readers (K.create k)
+    | Some v -> (
+      match Queue.pop t.writers with
+      | None ->
+        t.value <- None;
+        k v
+      | Some (v', w) ->
+        t.value <- Some v';
+        k v;
+        K.run w () )
+
+  let write t x k =
+    match t.value with
+    | Some _ -> Queue.push t.writers (x, K.create k)
+    | None -> (
+      match Queue.pop t.readers with
+      | None ->
+        t.value <- Some x;
+        k ()
+      | Some r ->
+        k ();
+        K.run r x )
+end

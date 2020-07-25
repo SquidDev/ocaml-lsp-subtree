@@ -1,9 +1,10 @@
-(lang dune 2.0)
+(lang dune 2.5)
 (using menhir 2.0)
 (using cinaps 1.0)
 (name lsp)
 
 (implicit_transitive_deps false)
+
 (license ISC)
 (maintainers "Rudi Grinberg <me@rgrinerg.com>")
 (authors

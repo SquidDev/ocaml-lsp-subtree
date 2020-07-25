@@ -107,6 +107,8 @@ val fork_and_join : (unit -> 'a t) -> (unit -> 'b t) -> ('a * 'b) t
     ]} *)
 val fork_and_join_unit : (unit -> unit t) -> (unit -> 'a t) -> 'a t
 
+val fork_and_race : (unit -> 'a t) -> (unit -> 'b t) -> ('a, 'b) Either.t t
+
 (** Map a list in parallel:
 
     {[
@@ -229,3 +231,27 @@ with type 'a fiber := 'a t
 (** [run t] runs a fiber. If the fiber doesn't complete immediately, [run t]
     returns [None]. *)
 val run : 'a t -> 'a option
+
+(** Mailbox variables *)
+module Mvar : sig
+  type 'a fiber
+
+  (** A mailbox variable can be thought of as a box that is either empty or
+      full. [create ()] creates a new empty box, and [create_full x] creates a
+      new full box containing [x].
+
+      [read] removes the value from a full mailbox variable and returns it, but
+      blocks if the mvar is currently empty. Symmetrically, [write] puts a value
+      into the mvar but blocks if the mvar is already full. *)
+
+  type 'a t
+
+  val create : unit -> 'a t
+
+  val create_full : 'a -> 'a t
+
+  val read : 'a t -> 'a fiber
+
+  val write : 'a t -> 'a -> unit fiber
+end
+with type 'a fiber := 'a t

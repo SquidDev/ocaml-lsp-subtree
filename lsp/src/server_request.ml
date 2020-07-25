@@ -12,7 +12,7 @@ type _ t =
   | ShowMessageRequest :
       ShowMessageRequestParams.t
       -> MessageActionItem.t option t
-  | UnknownRequest : string * Json.t option -> unit t
+  | UnknownRequest : string * Json.t option -> Json.t t
 
 type packed = E : 'r t -> packed
 
@@ -39,11 +39,11 @@ let params (type a) (t : a t) =
 let to_jsonrpc_request t ~id =
   let method_ = method_ t in
   let params = params t in
-  Jsonrpc.Request.create ~id ~method_ ~params ()
+  Jsonrpc.Message.create ~id ~method_ ~params ()
 
-let of_jsonrpc (r : Jsonrpc.Request.t) : (packed, string) Result.t =
+let of_jsonrpc (r : Jsonrpc.Message.request) : (packed, string) Result.t =
   let open Result.O in
-  let parse f = Jsonrpc.Request.params r f in
+  let parse f = Jsonrpc.Message.params r f in
   match r.method_ with
   | "workspace/configuration" ->
     let+ params = parse ConfigurationParams.t_of_yojson in
@@ -63,18 +63,18 @@ let of_jsonrpc (r : Jsonrpc.Request.t) : (packed, string) Result.t =
     E (ShowMessageRequest params)
   | m -> Ok (E (UnknownRequest (m, r.params)))
 
-let yojson_of_result (type a) (t : a t) (r : a) : Json.t option =
+let yojson_of_result (type a) (t : a t) (r : a) : Json.t =
   match (t, r) with
-  | WorkspaceApplyEdit _, r -> Some (ApplyWorkspaceEditResponse.yojson_of_t r)
+  | WorkspaceApplyEdit _, r -> ApplyWorkspaceEditResponse.yojson_of_t r
   | WorkspaceFolders, r ->
-    Some (Json.Conv.yojson_of_list WorkspaceFolder.yojson_of_t r)
-  | WorkspaceConfiguration _, r ->
-    Some (Json.Conv.yojson_of_list (fun x -> x) r)
-  | ClientRegisterCapability _, () -> None
-  | ClientUnregisterCapability _, () -> None
-  | ShowMessageRequest _, None -> None
-  | ShowMessageRequest _, Some r -> Some (MessageActionItem.yojson_of_t r)
-  | UnknownRequest (_, _), _ -> None
+    Json.Conv.yojson_of_list WorkspaceFolder.yojson_of_t r
+  | WorkspaceConfiguration _, r -> Json.Conv.yojson_of_list (fun x -> x) r
+  | ClientRegisterCapability _, () -> `Null
+  | ClientUnregisterCapability _, () -> `Null
+  | ShowMessageRequest _, None -> `Null
+  | ShowMessageRequest _, r ->
+    Json.Conv.yojson_of_option MessageActionItem.yojson_of_t r
+  | UnknownRequest (_, _), json -> json
 
 let response_of_json (type a) (t : a t) (json : Json.t) : a =
   let open Json.Conv in
@@ -85,4 +85,4 @@ let response_of_json (type a) (t : a t) (json : Json.t) : a =
   | ClientRegisterCapability _ -> unit_of_yojson json
   | ClientUnregisterCapability _ -> unit_of_yojson json
   | ShowMessageRequest _ -> option_of_yojson MessageActionItem.t_of_yojson json
-  | UnknownRequest (_, _) -> unit_of_yojson json
+  | UnknownRequest (_, _) -> json
