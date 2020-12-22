@@ -8,6 +8,7 @@ else
   git -C ocaml-lsp pull -q
 fi
 
-rm -rf vendor/* lsp
-cp -r ocaml-lsp/lsp ocaml-lsp/LICENSE.md .
-cp -r ocaml-lsp/vendor/csexp ocaml-lsp/vendor/fiber ocaml-lsp/vendor/stdune vendor
+rm -rf lsp-fiber jsonrpc-fiber
+cp -r ocaml-lsp/LICENSE.md .
+cp -r ocaml-lsp/lsp-fiber/src lsp-fiber
+cp -r ocaml-lsp/jsonrpc-fiber/src jsonrpc-fiber
